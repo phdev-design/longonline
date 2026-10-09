@@ -1,0 +1,78 @@
+name: Desktop Windows QA
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Numeric version of the draft release
+        required: true
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      GULONG_LAUNCHER_VERIFY_ONLY: '1'
+    steps:
+      - name: Download and verify draft artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $v=$env:RELEASE_VERSION
+          if($v -notmatch '^\d+\.\d+\.\d+$'){throw 'Invalid version'}
+          New-Item -ItemType Directory assets | Out-Null
+          gh release download "v$v" --repo $env:GITHUB_REPOSITORY --dir assets --pattern '*Windows-Setup.exe' --pattern 'windows-*.bin' --pattern 'manifest-windows.json'
+          if($LASTEXITCODE -ne 0){throw 'Draft download failed'}
+          $m=Get-Content assets/manifest-windows.json -Raw | ConvertFrom-Json
+          if($m.version -ne $v -or $m.platform -ne 'windows'){throw 'Manifest mismatch'}
+          foreach($p in $m.parts){
+            $f=Get-Item "assets/$($p.file)"
+            if($f.Length -ne $p.size -or (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower() -ne $p.sha256){throw 'Chunk hash mismatch'}
+          }
+      - name: Install, repair cache, launch game, upgrade and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $v=$env:RELEASE_VERSION
+          $setup=(Get-Item "assets/LongOnline-$v-Windows-Setup.exe").FullName
+          $install=Join-Path $env:LOCALAPPDATA 'LongOnline'
+          $p=Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+          if($p.ExitCode -ne 0){throw 'Installer failed'}
+          if(!(Test-Path "$install/LongOnline.exe") -or !(Test-Path "$install/engine/Game.exe")){throw 'Installed binaries missing'}
+          $desktop=[Environment]::GetFolderPath('Desktop')
+          if(!(Test-Path "$desktop/龍群俠傳Online.lnk")){throw 'Desktop shortcut missing'}
+          $cache=Join-Path $env:APPDATA "Godot/app_userdata/龍群俠傳Online 啟動器/versions/$v/windows"
+          New-Item -ItemType Directory -Force $cache | Out-Null
+          $m=Get-Content assets/manifest-windows.json -Raw | ConvertFrom-Json
+          # All downloaded draft chunks are locally seeded because draft URLs
+          # require GitHub authorization and cannot be used by public launchers.
+          foreach($part in $m.parts){Copy-Item "assets/$($part.file)" $cache}
+          $p=Start-Process "$install/LongOnline.exe" -ArgumentList '--headless' -RedirectStandardOutput launcher.log -RedirectStandardError launcher-error.log -Wait -PassThru
+          if($p.ExitCode -ne 0){throw 'Launcher failed'}
+          if((Get-Content launcher.log -Raw) -notmatch "LAUNCHER_READY $($m.sha256)"){throw 'Launcher did not assemble verified PCK'}
+          $pack=Join-Path $cache 'game.pck'
+          if((Get-FileHash $pack -Algorithm SHA256).Hash.ToLower() -ne $m.sha256){throw 'Final PCK differs'}
+          $env:LONG_SAVE_DISABLED='1'
+          $p=Start-Process "$install/engine/Game.exe" -ArgumentList @('--headless','--main-pack',"`"$pack`"",'--quit-after','5') -RedirectStandardOutput game.log -RedirectStandardError game-error.log -Wait -PassThru
+          if($p.ExitCode -ne 0){throw 'Native game startup failed'}
+          if((Get-Content game-error.log -Raw) -match 'SCRIPT ERROR:|Parse Error:|Failed loading resource|Error loading extension'){throw 'Native game resource failure'}
+          $p=Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+          if($p.ExitCode -ne 0 -or !(Test-Path $pack)){throw 'Upgrade failed or removed cache'}
+          $p=Start-Process "$install/Uninstall.exe" -ArgumentList @('/S',('_?='+$install)) -Wait -PassThru
+          if($p.ExitCode -ne 0){throw 'Uninstall failed'}
+          Start-Sleep -Seconds 2
+          if(Test-Path "$install/LongOnline.exe"){throw 'Launcher not removed'}
+          if(Test-Path "$install/engine/Game.exe"){throw 'Engine not removed'}
+          if(!(Test-Path $pack)){throw 'Uninstall removed player cache'}
+          $result=@{windows=@{passed=$true;environment='GitHub Actions windows-latest';installer_sha256=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLower();tests=@('native_install','shortcut','first_assembly_from_verified_chunks','headless_game_startup','overwrite_upgrade','uninstall_preserves_cache')}}
+          $result | ConvertTo-Json -Depth 5 | Set-Content windows-qa.json -Encoding utf8
+      - name: Preserve QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-qa-${{ inputs.version }}
+          path: |
+            *.log
+            windows-qa.json
