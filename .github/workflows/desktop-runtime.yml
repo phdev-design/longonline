@@ -1,0 +1,35 @@
+name: Desktop Godot runtime
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: godotengine/godot
+          ref: ed1daf0bf001b61586d9930840f2f1394092c079
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Build release runtime with external PCK support
+        shell: pwsh
+        run: |
+          python -m pip install scons==4.11.1
+          if($LASTEXITCODE -ne 0){throw 'SCons installation failed'}
+          python -m SCons platform=windows arch=x86_64 target=template_release disable_path_overrides=no debug_symbols=no accesskit=no angle=no d3d12=no -j4
+          if($LASTEXITCODE -ne 0){throw 'Runtime compilation failed'}
+          New-Item -ItemType Directory runtime | Out-Null
+          $binary=Get-Item bin/godot.windows.template_release.x86_64.exe
+          Copy-Item $binary runtime/windows_release_x86_64.exe
+          $hash=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLower()
+          @{godot='4.7.2';commit='ed1daf0bf001b61586d9930840f2f1394092c079';target='template_release';disable_path_overrides=$false;sha256=$hash} | ConvertTo-Json | Set-Content runtime/runtime-windows.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: godot-4.7.2-windows-runtime
+          path: runtime/
+          retention-days: 90
