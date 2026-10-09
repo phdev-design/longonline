@@ -69,9 +69,21 @@ jobs:
           $pack=Join-Path $cache 'game.pck'
           if((Get-FileHash $pack -Algorithm SHA256).Hash.ToLower() -ne $m.sha256){throw 'Final PCK differs'}
           $env:LONG_SAVE_DISABLED='1'
-          $p=Start-Process "$install/engine/Game.exe" -ArgumentList @('--headless','--main-pack',"`"$pack`"",'--quit-after','5') -RedirectStandardOutput game.log -RedirectStandardError game-error.log -Wait -PassThru
+          $p=Start-Process "$install/engine/Game.exe" -ArgumentList @('--headless','--path',"`"$install/engine`"",'--main-pack',"`"$pack`"",'--quit-after','5') -RedirectStandardOutput game.log -RedirectStandardError game-error.log -Wait -PassThru
           if($p.ExitCode -ne 0){throw 'Native game startup failed'}
           if((Get-Content game-error.log -Raw) -match 'SCRIPT ERROR:|Parse Error:|Failed loading resource|Error loading extension'){throw 'Native game resource failure'}
+          $env:GULONG_LAUNCHER_VERIFY_ONLY='0'
+          $env:GULONG_LAUNCHER_QA_START_GAME='1'
+          $p=Start-Process "$install/LongOnline.exe" -ArgumentList '--headless' -RedirectStandardOutput launcher-spawn.log -RedirectStandardError launcher-spawn-error.log -Wait -PassThru
+          if($p.ExitCode -ne 0){throw 'Launcher spawn failed'}
+          $spawn=Get-Content launcher-spawn.log -Raw
+          if($spawn -notmatch 'LAUNCHER_GAME_PID (\d+)'){throw 'Launcher did not start installed game'}
+          $gamePid=[int]$Matches[1]
+          if(Get-Process -Id $gamePid -ErrorAction SilentlyContinue){Wait-Process -Id $gamePid -Timeout 60}
+          $gameLog=Join-Path $cache 'launcher-game-qa.log'
+          Copy-Item $gameLog launcher-game-qa.log
+          $content=Get-Content $gameLog -Raw
+          if($content -notmatch 'Godot Engine v4.7.2' -or $content -match 'SCRIPT ERROR:|Parse Error:|Failed loading resource|Error loading extension'){throw 'Launcher-started game failed'}
           $p=Start-Process $setup -ArgumentList '/S' -Wait -PassThru
           if($p.ExitCode -ne 0 -or !(Test-Path $pack)){throw 'Upgrade failed or removed cache'}
           $p=Start-Process "$install/Uninstall.exe" -ArgumentList @('/S',('_?='+$install)) -Wait -PassThru
@@ -81,7 +93,7 @@ jobs:
           if(Test-Path "$install/engine/Game.exe"){throw 'Engine not removed'}
           if(!(Test-Path $pack)){throw 'Uninstall removed player cache'}
           if(!(Test-Path $settings) -or (Get-Content $settings -Raw).Trim() -ne 'volume=37'){throw 'Uninstall changed player settings'}
-          $result=@{windows=@{passed=$true;environment='GitHub Actions windows-latest';installer_sha256=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLower();tests=@('native_install','shortcut','first_assembly_from_verified_chunks','headless_game_startup','overwrite_upgrade','uninstall_preserves_cache','uninstall_preserves_settings')}}
+          $result=@{windows=@{passed=$true;environment='GitHub Actions windows-latest';installer_sha256=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLower();tests=@('native_install','shortcut','first_assembly_from_verified_chunks','headless_game_startup','installed_launcher_starts_game','overwrite_upgrade','uninstall_preserves_cache','uninstall_preserves_settings')}}
           $result | ConvertTo-Json -Depth 5 | Set-Content windows-qa.json -Encoding utf8
       - name: Preserve QA evidence
         if: always()
