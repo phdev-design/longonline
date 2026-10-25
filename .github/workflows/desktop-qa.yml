@@ -40,7 +40,8 @@ jobs:
           $c=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($e.payload)) | ConvertFrom-Json
           if($c.version -ne $v -or $c.platform -ne 'windows'){throw 'Channel mismatch'}
           $draft=(gh release view "v$v" --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json).assets.name
-          # Chunks reused from earlier public releases are downloaded by the launcher itself.
+          # Fresh install: chunks reused from earlier public releases are downloaded by the
+          # launcher itself (Mac QA tests the update from the previous version instead).
           $patterns=@($c.game.parts | ForEach-Object {"c-$($_.sha256).bin"} | Where-Object {$draft -contains $_} | Sort-Object -Unique | ForEach-Object {'--pattern';$_})
           if($patterns.Count){gh release download "v$v" --repo $env:GITHUB_REPOSITORY --dir assets @patterns;if($LASTEXITCODE -ne 0){throw 'Chunk download failed'}}
           foreach($p in $c.game.parts){
@@ -106,7 +107,7 @@ jobs:
           if(Test-Path "$install/engine/Game.exe"){throw 'Engine not removed'}
           if(!(Test-Path $pack)){throw 'Uninstall removed player cache'}
           if(!(Test-Path $settings) -or (Get-Content $settings -Raw).Trim() -ne 'volume=37'){throw 'Uninstall changed player settings'}
-          $result=@{windows=@{passed=$true;environment='GitHub Actions windows-latest';installer_sha256=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLower();tests=@('native_install','shortcut','signed_channel','launcher_ui_pack','first_assembly_from_verified_chunks','headless_game_startup','installed_launcher_starts_game','overwrite_upgrade','uninstall_preserves_cache','uninstall_preserves_settings')}}
+          $result=@{windows=@{passed=$true;environment='GitHub Actions windows-latest';installer_sha256=(Get-FileHash $setup -Algorithm SHA256).Hash.ToLower();tests=@('native_install','shortcut','signed_channel','launcher_ui_pack','first_assembly_from_verified_chunks','fresh_install_downloads_public_chunks','headless_game_startup','installed_launcher_starts_game','overwrite_upgrade','uninstall_preserves_cache','uninstall_preserves_settings')}}
           $result | ConvertTo-Json -Depth 5 | Set-Content windows-qa.json -Encoding utf8
       - name: Preserve QA evidence
         if: always()
