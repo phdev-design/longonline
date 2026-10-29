@@ -76,7 +76,18 @@ jobs:
           $ui=Get-Item "assets/launcher-ui-$($c.launcher_ui.sha256).pck" -ErrorAction SilentlyContinue
           if($ui){New-Item -ItemType Directory -Force "$state/launcher-ui" | Out-Null;Copy-Item $ui "$state/launcher-ui/$($c.launcher_ui.sha256).pck"}
           $p=Start-Process "$install/LongOnline.exe" -ArgumentList '--headless' -RedirectStandardOutput launcher.log -RedirectStandardError launcher-error.log -Wait -PassThru
-          if($p.ExitCode -ne 0){throw 'Launcher failed'}
+          if($p.ExitCode -ne 0){
+            $missing=@($g.parts | Where-Object { !(Test-Path (Join-Path $staging "c-$($_.sha256).bin")) })
+            "Launcher exit: $($p.ExitCode); missing chunks: $($missing.Count)" | Set-Content download-diagnostics.log
+            Get-PSDrive -PSProvider FileSystem | Format-Table | Out-String | Add-Content download-diagnostics.log
+            $missing | Select-Object -First 12 | ForEach-Object {
+              try {
+                $r=Invoke-WebRequest -Uri $_.url -Method Head -MaximumRedirection 8 -TimeoutSec 30
+                "HEAD $($_.sha256): $($r.StatusCode)" | Add-Content download-diagnostics.log
+              } catch { "HEAD $($_.sha256): $($_.Exception.Message)" | Add-Content download-diagnostics.log }
+            }
+            throw 'Launcher failed'
+          }
           $out=Get-Content launcher.log -Raw
           if($out -notmatch "LAUNCHER_READY $($g.sha256)"){throw 'Launcher did not assemble the channel PCK'}
           if($out -notmatch "LAUNCHER_UI $([regex]::Escape($v))"){throw 'Launcher did not mount the signed UI pack'}
