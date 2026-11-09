@@ -75,7 +75,16 @@ jobs:
           Get-ChildItem assets -Filter 'c-*.bin' | Move-Item -Destination $staging
           $ui=Get-Item "assets/launcher-ui-$($c.launcher_ui.sha256).pck" -ErrorAction SilentlyContinue
           if($ui){New-Item -ItemType Directory -Force "$state/launcher-ui" | Out-Null;Copy-Item $ui "$state/launcher-ui/$($c.launcher_ui.sha256).pck"}
-          $p=Start-Process "$install/LongOnline.exe" -ArgumentList '--headless' -RedirectStandardOutput launcher.log -RedirectStandardError launcher-error.log -Wait -PassThru
+          # Match the player's Retry action and retain chunks verified by the launcher.
+          for($attempt=1; $attempt -le 5; $attempt++){
+            $p=Start-Process "$install/LongOnline.exe" -ArgumentList '--headless' -RedirectStandardOutput launcher.log -RedirectStandardError launcher-error.log -Wait -PassThru
+            if($p.ExitCode -eq 0){break}
+            $out=Get-Content launcher.log -Raw
+            if($out -notmatch 'LAUNCHER_FAILURE 下載或校驗失敗' -or $attempt -eq 5){break}
+            Copy-Item launcher.log "launcher-attempt-$attempt.log"
+            Copy-Item launcher-error.log "launcher-error-attempt-$attempt.log"
+            Start-Sleep -Seconds (10 * $attempt)
+          }
           if($p.ExitCode -ne 0){
             $missing=@($g.parts | Where-Object { !(Test-Path (Join-Path $staging "c-$($_.sha256).bin")) })
             "Launcher exit: $($p.ExitCode); missing chunks: $($missing.Count)" | Set-Content download-diagnostics.log
